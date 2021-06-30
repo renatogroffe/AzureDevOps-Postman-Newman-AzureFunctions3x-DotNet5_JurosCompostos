@@ -1,0 +1,112 @@
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  vmImageName: 'ubuntu-latest'
+  pathFunctionApp: ./FunctionAppFinancas
+  projectFileFunctionApp: '**/FunctionAppFinancas.csproj'
+  testsDirectory: './Tests'
+  fileLogFunctionApp: 'log-execucao-functionapp.txt'
+  collectionPostmanFile: CalculoJurosCompostosFunctionApp.postman_collection.json
+  dataPostmanTestsFile: 'data-tests.json'
+  artifactFunctionApp: 'functionAppFinancasDotNet5'
+
+stages:
+- stage: Tests
+  displayName: Tests
+  jobs:
+  - job: Tests
+    displayName: Tests
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - script: |
+        npm i azure-functions-core-tools@3
+        npx func
+      displayName: Instalar Azure Functions Core Tools v3
+    - script: |
+        cd $(pathFunctionApp)
+        ls
+        dotnet build --configuration Debug
+        nohup npx func start > $(fileLogFunctionApp) 2>&1 &
+      displayName: Executar a Function
+    - script: |
+        cd $(testsDirectory)
+        ls
+        newman run $(collectionPostmanFile) -d $(dataPostmanTestsFile)
+      displayName: Testes da API REST com Newman + Postman
+    - script: |
+        cd $(testsDirectory)
+        npm install newman@5.1.2
+        echo "** Versão Global do Newman **"
+        newman -v
+        echo "** Versão Local do Newman **"
+        npx newman -v
+        npm install newman-reporter-htmlextra@1.21.0
+      displayName:  Instalar packages para uso do newman-reporter-htmlextra
+      condition: always() 
+    - script: |
+        cd $(testsDirectory)
+        npx newman run $(collectionPostmanFile) -d $(dataPostmanTestsFile) --reporters htmlextra --reporter-htmlextra-export ./newman/test-results.html
+        cd ./newman
+        ls
+      displayName: Gerar resultados em HTML dos testes da API REST com Newman
+      condition: always() 
+    - task: UploadPostmanHtmlReport@1
+      inputs:
+        cwd: '$(System.DefaultWorkingDirectory)/$(testsDirectory)'
+      condition: always() 
+    - task: PublishPipelineArtifact@1
+      displayName: Publicar Artifact com os resultados do Postman
+      inputs:
+        targetPath: '$(System.DefaultWorkingDirectory)/$(pathFunctionApp)/$(fileLogFunctionApp)' 
+        artifact: 'log-execucao-functionapp'
+        publishLocation: 'pipeline'
+      condition: always() 
+- stage: Build
+  dependsOn: Tests
+  displayName: Build
+  jobs:
+  - job: Build
+    displayName: Build da Function App em .NET
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: DotNetCoreCLI@2
+      displayName: Build + Publish gerando Artifact
+      inputs:
+        command: 'publish'
+        publishWebProjects: false
+        projects: $(projectFileFunctionApp)
+        arguments: '--configuration Release --output $(Build.ArtifactStagingDirectory)'
+    - task: PublishPipelineArtifact@1
+      displayName: Publish do Artifact
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)' 
+        artifactName: $(artifactFunctionApp)
+- stage: Deployment
+  displayName: Deployment da Function App em Linux
+  dependsOn: Build
+  jobs:
+  - job: Deployment
+    displayName: Deployment da Function App no Azure
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: DownloadPipelineArtifact@2
+      displayName: Download do Artifact gerado no stage de Build
+      inputs:
+        buildType: 'current'
+        artifactName: $(artifactFunctionApp)
+        targetPath: '$(System.DefaultWorkingDirectory)/publish'
+    - task: AzureFunctionApp@1
+      displayName: Deployment da Function App no Azure em Linux
+      inputs:
+        azureSubscription: 'AZURE SUBSCRIPTION'
+        appType: 'functionAppLinux'
+        appName: 'groffefinancas'
+        package: '$(System.DefaultWorkingDirectory)/**/*.zip'
+        appSettings: '-FUNCTIONS_WORKER_RUNTIME "dotnet-isolated"'
