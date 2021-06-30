@@ -3,4 +3,4 @@ Pipeline do Azure DevOps para automação de testes (com Postman + Newman), buil
 
 Projeto que serviu de base para implementação deste pipeline:
 
-https://github.com/renatogroffe/ASPNETCore5-REST_API-Postman_CalculoIMC
+https://github.com/renatogroffe/DotNet5-AzureFunctions-HttpTrigger-Postman_JurosCompostos
